@@ -1,0 +1,30 @@
+table_all_logs     : all_logs
+table_alerts_logs  : alert_logs
+fluent_service_file: td-agent-bit.service
+# path_fluent_config: /etc/td-agent-bit/td-agent-bit.conf
+path_fluent_config : c:\Users\android\go\src\redits.oculeus.com\asorokin\captura-logs-manager\test-data\td-agent-bit.conf
+server_name        : Work Notebook
+user_name          : userNotRoot
+user_pass          : password
+
+logger:
+  loglevel: info
+  # logfile : agent-bit-control.log
+
+  logrotation:
+    maxsize   : 1
+    maxbackups: 10
+
+  logformatter:
+    timestamp_format: 2006-01-02 15:04:05.000
+    full_path_caller: false
+
+postgres:
+  host          : localhost
+  port          : 5432
+  database      : captdb
+  schema        : logs_manager
+  user          : postgres
+  password      : postgres
+  sslmode       : disable
+  max_open_conns: 25

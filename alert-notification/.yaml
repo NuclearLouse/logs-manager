@@ -1,0 +1,61 @@
+server_name         : Server Name
+check_urgent_alerts : 1m 
+check_regular_alerts: 60m 
+send_error_period   : 10 # minute
+send_urgent_period  : 10 # minute
+start_clean_old_logs: 00:00:00
+num_attempts_fail   : 10
+num_logs_for_attach : 20
+admin_emails        : admin@mail.xyz
+
+logger:
+  loglevel: debug
+  # logfile : alert-notification.log
+
+  logrotation:
+    maxsize   : 1
+    maxbackups: 10
+
+  logformatter:
+    timestamp_format: 2006-01-02 15:04:05.000
+    full_path_caller: false
+
+postgres:
+  host          : localhost
+  port          : 5432
+  database      : captdb
+  schema        : logs_manager
+  user          : postgres
+  password      : postgres
+  sslmode       : disable
+  max_open_conns: 25
+
+notification:
+  enabled: email, telegram, bitrix
+
+  email:
+    visible_name: ALert Notification Service
+    smtp_user   : smtp-user@mail.xyz
+    smtp_pass   : smtp-password
+    smtp_host   : smtp.host.xyz
+    smtp_port   : 587
+    timeout     : 5s 
+    # addresses   : user@mail.xyz
+
+  bitrix:
+    host            : company.bitrix24.eu
+    user_token      : user-token
+    user_id         : 167 
+    bot_id          : 171
+    client_id       : client-id
+    timeout         : 5s 
+    lifetime_message: 48h
+    use_notification: true
+    admin_id        : 121
+    admin_token     : admin-token
+
+  telegram:
+    host     : api.telegram.org
+    token    : telegram-token
+    timeout  : 5s 
+    addresses: 1234567890

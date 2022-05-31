@@ -1,0 +1,12 @@
+other.txt
+bitrix.txt
+todo.txt
+bitrix-users.txt
+/agent-bit-control/*.exe
+/agent-bit-control/dev.yaml
+/agent-bit-control/agent-bit-control
+/alert-notification-service/alert-notification
+/alert-notification-service/*.exe
+/alert-notification-service/dev.yaml
+/logs
+/bin
