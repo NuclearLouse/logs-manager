@@ -67,18 +67,21 @@ type dataTemplate struct {
 }
 
 func (s *Service) sendAdminNotificate(typeNotificate notificate, internalError ...error) {
-
+	s.log.Debugln("try send admin notification:", typeNotificate.String())
 	if internalError != nil {
+		s.log.Debug("check time last send notification")
 		timeNow := time.Now().Unix()
 		lastSend := s.checkSendLastInternalError(internalError[0], timeNow)
 		switch {
 		case lastSend != 0:
 			if (timeNow-lastSend)/60 <= s.cfg.SendErrorPeriod {
+				s.log.Debug("the last notice period has not expired")
 				return
 			}
 		}
 	}
 	header := typeNotificate.makeSubject(s.cfg.ServerName, serviceName)
+	s.log.Debugln("make message header/subject:", header)
 	var interr string
 	if internalError != nil {
 		interr = internalError[0].Error()
@@ -91,14 +94,16 @@ func (s *Service) sendAdminNotificate(typeNotificate notificate, internalError .
 	}
 	for senderName, sender := range s.notificator {
 		body := new(bytes.Buffer)
+		s.log.Debug("trying to fill the template with data")
 		err := template.Must(template.ParseFiles(filepath.Join("templates", senderName, typeNotificate.String()+".tmpl"))).Execute(body, data)
 		if err != nil {
 			s.log.Errorln("parse template:", err)
 			return
 		}
-
+		addresses := s.getAdminAddresses(senderName)
+		s.log.Debugf("trying send message via [%s] to: %s", senderName, addresses)
 		if err := sender.SendMessage(notification.Message{
-			Addresses: s.getAdminAddresses(senderName),
+			Addresses: addresses,
 			Content:   body,
 			Subject:   header,
 		}); err == nil {

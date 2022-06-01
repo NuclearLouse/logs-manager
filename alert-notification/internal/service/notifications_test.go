@@ -4,6 +4,11 @@ import (
 	"testing"
 
 	"redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/datastructs"
+
+	"github.com/golang/mock/gomock"
+	"redits.oculeus.com/asorokin/notification"
+
+	mock "redits.oculeus.com/asorokin/notification/mock"
 )
 
 func TestService_sendAdminNotificate(t *testing.T) {
@@ -11,12 +16,32 @@ func TestService_sendAdminNotificate(t *testing.T) {
 		typeNotificate notificate
 		internalError  []error
 	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	s := &Service{
+		cfg: &config{
+			ServerName: "Work Notebook",
+		},
+		notificator: map[string]notification.Notificator{
+			"email": mock.NewMockNotificator(ctrl),
+		},
+	}
+
 	tests := []struct {
 		name string
 		s    *Service
 		args args
 	}{
 		// TODO: Add test cases.
+		{
+			name: "Send Test Connect",
+			s:    s,
+			args: args{
+				typeNotificate: TEST_CONNECT,
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

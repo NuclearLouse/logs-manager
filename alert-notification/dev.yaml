@@ -6,7 +6,7 @@ send_urgent_period  : 10 # minute
 start_clean_old_logs: 00:00:00
 num_attempts_fail   : 10
 num_logs_for_attach : 20
-admin_emails        : sorokin@oculeus.com 
+admin_emails        : [sorokin@oculeus.com] 
 
 logger:
   loglevel: debug
@@ -23,7 +23,7 @@ logger:
 postgres:
   host          : localhost
   port          : 5432
-  database      : captdb
+  database      : postgres
   schema        : logs_manager
   user          : postgres
   password      : postgres
@@ -31,7 +31,7 @@ postgres:
   max_open_conns: 25
 
 notification:
-  enabled: email, telegram, bitrix
+  enabled: [email, bitrix]
 
   email:
     visible_name: ALert Notification Service
@@ -54,10 +54,10 @@ notification:
     use_notification: true
     admin_id        : 121
     admin_token     : 8xk2mupieukqprnx
-    # addresses       : 121
+    # addresses       : [121]
 
   telegram:
     host     : api.telegram.org
     token    : 5050037516:AAH7ARXYiighO50-6djxbq4ISOGrzm8eSqw
     timeout  : 5s 
-    addresses: 1447091689
+    addresses: [1447091689]

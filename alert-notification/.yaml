@@ -6,7 +6,7 @@ send_urgent_period  : 10 # minute
 start_clean_old_logs: 00:00:00
 num_attempts_fail   : 10
 num_logs_for_attach : 20
-admin_emails        : admin@mail.xyz
+admin_emails        : [admin@mail.xyz]
 
 logger:
   loglevel: debug
@@ -31,7 +31,7 @@ postgres:
   max_open_conns: 25
 
 notification:
-  enabled: email, telegram, bitrix
+  enabled: [email, telegram, bitrix]
 
   email:
     visible_name: ALert Notification Service
@@ -40,7 +40,7 @@ notification:
     smtp_host   : smtp.host.xyz
     smtp_port   : 587
     timeout     : 5s 
-    # addresses   : user@mail.xyz
+    # addresses   : [user@mail.xyz]
 
   bitrix:
     host            : company.bitrix24.eu
@@ -58,4 +58,4 @@ notification:
     host     : api.telegram.org
     token    : telegram-token
     timeout  : 5s 
-    addresses: 1234567890
+    addresses: [1234567890]

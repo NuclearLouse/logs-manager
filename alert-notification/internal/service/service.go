@@ -100,49 +100,8 @@ func New() (*Service, error) {
 		journalUrgentAlertLog: make(map[int]int64),
 		journalInternalErrors: make(map[string]int64),
 		servedApps:            make(map[int]context.CancelFunc),
+		notificator:           make(map[string]notification.Notificator),
 	}, nil
-}
-
-func (s *Service) registrInternalError(err error, tn int64) {
-	s.Lock()
-	if s.journalInternalErrors == nil {
-		s.journalInternalErrors = make(map[string]int64)
-	}
-	s.journalInternalErrors[err.Error()] = tn
-	s.Unlock()
-}
-
-func (s *Service) checkSendLastInternalError(err error, tn int64) int64 {
-	s.RLock()
-	t, ok := s.journalInternalErrors[err.Error()]
-	if ok {
-		s.RUnlock()
-		return t
-	}
-	s.RUnlock()
-	s.registrInternalError(err, tn)
-	return 0
-}
-
-func (s *Service) registrUrgent(appID int, tn int64) {
-	s.Lock()
-	if s.journalUrgentAlertLog == nil {
-		s.journalUrgentAlertLog = make(map[int]int64)
-	}
-	s.journalUrgentAlertLog[appID] = tn
-	s.Unlock()
-}
-
-func (s *Service) checkSendLastUrgent(appID int, tn int64) int64 {
-	s.RLock()
-	t, ok := s.journalUrgentAlertLog[appID]
-	if ok {
-		s.RUnlock()
-		return t
-	}
-	s.RUnlock()
-	s.registrUrgent(appID, tn)
-	return 0
 }
 
 func (s *Service) Start() {
@@ -157,6 +116,7 @@ func (s *Service) Start() {
 	s.store = database.New(pool)
 
 	for _, messenger := range s.cfg.Notification.Enabled {
+		
 		switch messenger {
 		case "email":
 			s.notificator[messenger] = email.New(s.cfg.Notification.Email)
@@ -165,7 +125,10 @@ func (s *Service) Start() {
 		case "bitrix":
 			s.notificator[messenger] = bitrix.New(s.cfg.Notification.Bitrix)
 		}
+		s.log.Debugf("Added Notificator: %s : %#v", messenger, s.notificator[messenger])
 	}
+	s.log.Debugf("Notificators: %#v\n", s.notificator)
+	s.logconfigInfo()
 
 	go s.sendAdminNotificate(TEST_CONNECT)
 
@@ -323,7 +286,7 @@ CLEANER:
 func (s *Service) startAllAlertWorkers(ctx context.Context, wgWorkers *sync.WaitGroup) error {
 	ids, err := s.store.AllServedAppIDs(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("getting the id of all serviced applications: %w", err)
 	}
 	if len(ids) == 0 {
 		return errors.New("the service has no supported applications")
@@ -336,7 +299,7 @@ func (s *Service) startAllAlertWorkers(ctx context.Context, wgWorkers *sync.Wait
 		s.servedApps[id] = stopFunc
 		alertset, err := s.store.ServedAppAlertSettings(ctx, id)
 		if err != nil {
-			return err
+			return fmt.Errorf("getting the alert settings appID=%d : %w", id, err)
 		}
 		wgWorkers.Add(1)
 		go s.alertWorker(workerCtx, alertset, REGULAR, wgWorkers)
@@ -465,4 +428,111 @@ func (s *Service) trySendAlertEmail(ctx context.Context, typeAlert string, alert
 
 	}
 	return errors.New("all attempts have been exhausted")
+}
+
+func (s *Service) registrInternalError(err error, tn int64) {
+	s.Lock()
+	if s.journalInternalErrors == nil {
+		s.journalInternalErrors = make(map[string]int64)
+	}
+	s.journalInternalErrors[err.Error()] = tn
+	s.Unlock()
+}
+
+func (s *Service) checkSendLastInternalError(err error, tn int64) int64 {
+	s.RLock()
+	t, ok := s.journalInternalErrors[err.Error()]
+	if ok {
+		s.RUnlock()
+		return t
+	}
+	s.RUnlock()
+	s.registrInternalError(err, tn)
+	return 0
+}
+
+func (s *Service) registrUrgent(appID int, tn int64) {
+	s.Lock()
+	if s.journalUrgentAlertLog == nil {
+		s.journalUrgentAlertLog = make(map[int]int64)
+	}
+	s.journalUrgentAlertLog[appID] = tn
+	s.Unlock()
+}
+
+func (s *Service) checkSendLastUrgent(appID int, tn int64) int64 {
+	s.RLock()
+	t, ok := s.journalUrgentAlertLog[appID]
+	if ok {
+		s.RUnlock()
+		return t
+	}
+	s.RUnlock()
+	s.registrUrgent(appID, tn)
+	return 0
+}
+
+func (s *Service) logconfigInfo() {
+	s.log.Debugf(`Obtain Service Configuration:
+
+    Server Name         : %s
+    Check Urgent Alerts : %s
+    Check Regular Alerts: %s
+    Send Error Period   : %d
+    Send Urgent Period  : %d
+    Start Clean Old Logs: %s
+    Num Logs Attach     : %d
+    Num Attempts Fail   : %d
+	Notification Enabled: %s
+
+Postgres:
+    User         : %s
+    Pass         : %s
+    Host         : %s
+    Port         : %d
+    Database     : %s
+    Schema       : %s
+    SSLMode      : %s
+    PoolMaxConns : %d
+
+Email:
+	SmtpUser    : %s
+	SmtpPass    : %s
+	SmtpHost    : %s
+	SmtpPort    : %s
+	VisibleName : %s
+	Timeout     : %s
+	WithoutAuth : %t
+	Admin Emails: %s
+`,
+		s.cfg.ServerName,
+		s.cfg.CheckUrgentAlerts,
+		s.cfg.CheckRegularAlerts,
+		s.cfg.SendErrorPeriod,
+		s.cfg.SendUrgentPeriod,
+		s.cfg.StartCleanOldLogs,
+		s.cfg.NumLogsAttach,
+		s.cfg.NumAttemptsFail,
+		s.cfg.Notification.Enabled,
+		s.cfg.Postgres.User,
+		s.cfg.Postgres.Pass,
+		s.cfg.Postgres.Host,
+		s.cfg.Postgres.Port,
+		s.cfg.Postgres.Database,
+		s.cfg.Postgres.Schema,
+		s.cfg.Postgres.SSLMode,
+		s.cfg.Postgres.PoolMaxConns,
+		s.cfg.Notification.Email.SmtpUser,
+		s.cfg.Notification.Email.SmtpPass,
+		s.cfg.Notification.Email.SmtpHost,
+		s.cfg.Notification.Email.SmtpPort,
+		s.cfg.Notification.Email.VisibleName,
+		s.cfg.Notification.Email.Timeout,
+		s.cfg.Notification.Email.WithoutAuth,
+		s.cfg.AdminEmails,
+	)
+	s.log.Debug("Check Notificators:")
+	for name, notif := range s.notificator {
+		s.log.Debugln(name, " = ", notif != nil)
+	}
 }
