@@ -125,7 +125,6 @@ func (s *Service) monitorSignalOS(ctx context.Context) {
 
 func (s *Service) monitorSignalDB(ctx context.Context) {
 	s.log.Info("Monitor signal DB: start monitor user-interface")
-	// serverName := s.ini.Section("server").Key("name").String()
 	for {
 		select {
 		case <-ctx.Done():

@@ -1,17 +1,18 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
-	"redits.oculeus.com/asorokin/captura-logs-manager/agent-bit-control/internal/datastructs"
+	"redits.oculeus.com/asorokin/logs-manager-src/agent-bit-control/internal/datastructs"
 
 	"github.com/stretchr/testify/assert"
-	"gopkg.in/ini.v1"
-	logger "redits.oculeus.com/asorokin/logging"
+	conf "github.com/tinrab/kit/cfg"
+	"redits.oculeus.com/asorokin/logging"
 )
 
-var testConfig = `c:\Users\android\go\src\redits.oculeus.com\asorokin\captura-logs-manager\test-data\agent-bit-control-test.ini`
+var testConfig = `c:\Users\android\go\src\redits.oculeus.com\asorokin\logs-manager-src\test-data\agent-bit-control-test.yaml`
 
 //1. OK. 1 файл есть алерт фразы = ок, количество тегов == алерт-фразам, в обоих блоках общий путь к логам
 //2. OK. 1 файл нет алерт фраз = !ок, что отсеивать? - это ошибка, проверять на уровне сканирования таблицы?
@@ -19,9 +20,16 @@ var testConfig = `c:\Users\android\go\src\redits.oculeus.com\asorokin\captura-lo
 //4. OK. 2 файла нет алерт фраз = ок, нет фильтр блока, только инпут-оутпуты с путями к логам
 
 func TestWriteNewConfig(t *testing.T) {
-	srv := testingService(t)
+	cfg, err := testingConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := testingService(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	srv.servedApps = testingCasesServedApps(t)
-	file := srv.ini.Section("service").Key("path_to_fluent_bit_config").String()
+	file := srv.cfg.PathFluentConfig
 	f, err := os.Create(file)
 	if err != nil {
 		t.Error(err)
@@ -36,7 +44,15 @@ func TestWriteNewConfig(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	expected, err := os.ReadFile(srv.ini.Section("test").Key("case_1").String())
+	tests, ok := cfg.Data["tests"]
+	if !ok {
+		t.Fatal("нет тест кейса")
+	}
+	cases, ok := tests.(map[string]string)
+	if !ok {
+		t.Fatal("не смог получить карту тестов")
+	}
+	expected, err := os.ReadFile(cases["case_1"])
 	if err != nil {
 		t.Error(err)
 	}
@@ -63,19 +79,25 @@ func testingCasesServedApps(t *testing.T) []*datastructs.ServedApplication {
 	return testingCases
 }
 
-func testingService(t *testing.T) *Service {
-	t.Helper()
-	cfg, err := ini.Load(testConfig)
-	if err != nil {
-		return nil
+func testingConfig() (*conf.Config, error) {
+	cfg := conf.New()
+	if err := cfg.LoadFile(testConfig); err != nil {
+		return nil, fmt.Errorf("load config files: %w", err)
 	}
-	cfgLog := logger.DefaultConfig()
-	if err := cfg.Section("logger").MapTo(cfgLog); err != nil {
-		return nil
+	return cfg, nil
+}
+
+func testingService(c *conf.Config) (*Service, error) {
+	cfg := &config{
+		Logger: logging.DefaultConfig(),
+		// Postgres: postgres.DefaultConfig(),
+	}
+	if err := c.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("mapping config files: %w", err)
 	}
 
 	return &Service{
-		log: logger.New(cfgLog),
-		ini: cfg,
-	}
+		log: logging.New(cfg.Logger),
+		cfg: cfg,
+	}, nil
 }
