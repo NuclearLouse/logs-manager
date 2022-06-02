@@ -46,18 +46,19 @@ type Service struct {
 }
 
 type config struct {
-	ServerName         string           `cfg:"server_name"`
-	StartCleanOldLogs  string           `cfg:"start_clean_old_logs"`
-	CheckRegularAlerts time.Duration    `cfg:"check_regular_alerts"`
-	CheckUrgentAlerts  time.Duration    `cfg:"check_urgent_alerts"`
-	SendUrgentPeriod   int64            `cfg:"send_urgent_period"`
-	SendErrorPeriod    int64            `cfg:"send_error_period"`
-	NumLogsAttach      int              `cfg:"num_logs_for_attach"`
-	NumAttemptsFail    int              `cfg:"num_attempts_fail"`
-	AdminEmails        []string         `cfg:"admin_emails"`
-	Logger             *logging.Config  `cfg:"logger"`
-	Postgres           *postgres.Config `cfg:"postgres"`
-	Notification       struct {
+	ServerName          string           `cfg:"server_name"`
+	StartCleanOldLogs   string           `cfg:"start_clean_old_logs"`
+	CheckRegularAlerts  time.Duration    `cfg:"check_regular_alerts"`
+	CheckUrgentAlerts   time.Duration    `cfg:"check_urgent_alerts"`
+	SendUrgentPeriod    int64            `cfg:"send_urgent_period"`
+	SendErrorPeriod     int64            `cfg:"send_error_period"`
+	NumLogsAttach       int              `cfg:"num_logs_for_attach"`
+	NumAttemptsFail     int              `cfg:"num_attempts_fail"`
+	AdminEmails         []string         `cfg:"admin_emails"`
+	WithoutCheckPgAgent bool             `cfg:"without_check_pgagent"`
+	Logger              *logging.Config  `cfg:"logger"`
+	Postgres            *postgres.Config `cfg:"postgres"`
+	Notification        struct {
 		Enabled  []string
 		Email    *email.Config    `cfg:"email"`
 		Bitrix   *bitrix.Config   `cfg:"bitrix"`
@@ -116,7 +117,7 @@ func (s *Service) Start() {
 	s.store = database.New(pool)
 
 	for _, messenger := range s.cfg.Notification.Enabled {
-		
+
 		switch messenger {
 		case "email":
 			s.notificator[messenger] = email.New(s.cfg.Notification.Email)
@@ -127,7 +128,9 @@ func (s *Service) Start() {
 		}
 		s.log.Debugf("Added Notificator: %s : %#v", messenger, s.notificator[messenger])
 	}
-	s.log.Debugf("Notificators: %#v\n", s.notificator)
+	if len(s.notificator) == 0 {
+		s.log.Fatal("Service: no connected notificators")
+	}
 	s.logconfigInfo()
 
 	go s.sendAdminNotificate(TEST_CONNECT)
@@ -135,7 +138,10 @@ func (s *Service) Start() {
 	go s.monitorSignalOS(mainCtx)
 	go s.monitorSignalDB(mainCtx)
 	go s.cleanerOldLogs(mainCtx)
-	go s.checkPgAgent(mainCtx)
+
+	if !s.cfg.WithoutCheckPgAgent {
+		go s.checkPgAgent(mainCtx)
+	}
 
 	var wgWorkers sync.WaitGroup
 	if err := s.startAllAlertWorkers(mainCtx, &wgWorkers); err != nil {
@@ -390,6 +396,7 @@ func (s *Service) alertWorker(ctx context.Context, alertset *datastructs.AlertSe
 		s.log.Tracef("Alert Worker:for application:%s %s set send TRUE flags: %d %s ALERTS", alertset.ServerName, alertset.ServiceName, len(ids), at.name)
 		if err := s.store.SetSendFlag(ctx, ids); err != nil {
 			s.log.Errorf("Alert Worker: %s for application:%s %s set send TRUE flags: %s", at.name, alertset.ServerName, alertset.ServiceName, err)
+			go s.sendAdminNotificate(INTERNAL_ERROR, fmt.Errorf("set send TRUE flags: %w", err))
 		}
 
 		time.Sleep(1 * time.Second)

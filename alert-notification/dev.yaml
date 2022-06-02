@@ -1,12 +1,13 @@
-server_name         : Work Notebook
-check_urgent_alerts : 1m 
-check_regular_alerts: 60m 
-send_error_period   : 10 # minute
-send_urgent_period  : 10 # minute
-start_clean_old_logs: 00:00:00
-num_attempts_fail   : 10
-num_logs_for_attach : 20
-admin_emails        : [sorokin@oculeus.com] 
+server_name          : Work Notebook
+check_urgent_alerts  : 1m 
+check_regular_alerts : 60m 
+send_error_period    : 10 # minute
+send_urgent_period   : 10 # minute
+start_clean_old_logs : 00:00:00
+num_attempts_fail    : 10
+num_logs_for_attach  : 20
+admin_emails         : [sorokin@oculeus.com] 
+without_check_pgagent: true
 
 logger:
   loglevel: debug
@@ -40,24 +41,16 @@ notification:
     smtp_host   : smtp.1und1.de
     smtp_port   : 587
     timeout     : 5s 
-    # addresses   : sorokin@oculeus.com
+    # without_auth: true
 
   bitrix:
     host            : oculeus.bitrix24.eu
     user_token      : g76pbgrrl0w3dfae
     user_id         : 167 
     bot_id          : 171
-    # bot_code        : 9x5gp1xb1g0sh0nj
     client_id       : dg3badlqc7x6v53e42sschpdd90xxo1c
     timeout         : 5s 
     lifetime_message: 48h
     use_notification: true
     admin_id        : 121
     admin_token     : 8xk2mupieukqprnx
-    # addresses       : [121]
-
-  telegram:
-    host     : api.telegram.org
-    token    : 5050037516:AAH7ARXYiighO50-6djxbq4ISOGrzm8eSqw
-    timeout  : 5s 
-    addresses: [1447091689]
