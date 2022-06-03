@@ -10,8 +10,8 @@ build:
 	go build ${LDFLAGS_AGENT_DEV} -o agent-bit-control ./agent-bit-control/cmd/agent-bit-control 
 	go build ${LDFLAGS_ALERT_DEV} -o alert-notification ./alert-notification/cmd/alert-notification
 
-.PHONY: build-linux
-build-linux:
+.PHONY: deploy
+deploy:
 	go build ${LDFLAGS_AGENT} -o ../logs-manager/agent-bit-control ./agent-bit-control/cmd/agent-bit-control 
 	go build ${LDFLAGS_ALERT} -o ../logs-manager/alert-notification ./alert-notification/cmd/alert-notification
 

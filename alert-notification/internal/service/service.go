@@ -133,7 +133,7 @@ func (s *Service) Start() {
 	}
 	s.logconfigInfo()
 
-	go s.sendAdminNotificate(TEST_CONNECT)
+	go s.sendAdminNotification(TEST_CONNECT)
 
 	go s.monitorSignalOS(mainCtx)
 	go s.monitorSignalDB(mainCtx)
@@ -208,7 +208,7 @@ func (s *Service) monitorSignalDB(ctx context.Context) {
 			sig, err := s.store.GetSignalDB(ctx)
 			if err != nil {
 				s.log.Errorln("Monitor signal DB: read control signals:", err)
-				go s.sendAdminNotificate(INTERNAL_ERROR, fmt.Errorf("read control signals from DB: %w", err))
+				go s.sendAdminNotification(INTERNAL_ERROR, fmt.Errorf("read control signals from DB: %w", err))
 			}
 			switch {
 			case sig.Stop:
@@ -240,7 +240,7 @@ func (s *Service) checkPgAgent(ctx context.Context) {
 		default:
 			if err := s.store.CheckPgAgent(ctx); err != nil {
 				s.log.Errorln("Check health Pg-Agent: invoke function public.pgagent_jobs_check():", err)
-				go s.sendAdminNotificate(INTERNAL_ERROR, err)
+				go s.sendAdminNotification(INTERNAL_ERROR, err)
 			}
 		}
 		time.Sleep(24 * time.Hour)
@@ -274,7 +274,7 @@ CLEANER:
 			clearDataStatistic, err := s.store.DeleteOldLogs(ctx)
 			if err != nil {
 				s.log.Errorln("Cleaner DB: cleaning the database from old logs:", err)
-				go s.sendAdminNotificate(INTERNAL_ERROR, err)
+				go s.sendAdminNotification(INTERNAL_ERROR, err)
 				continue
 			}
 			for _, cd := range clearDataStatistic {
@@ -335,7 +335,7 @@ func (s *Service) alertWorker(ctx context.Context, alertset *datastructs.AlertSe
 			alerts, err = s.store.AlertLogs(ctx, alertset.ServiceID)
 			if err != nil {
 				s.log.Errorf("Alert Worker: %s for application:%s %s obtain %s alert logs: %s", at.name, alertset.ServerName, alertset.ServiceName, at.name, err)
-				go s.sendAdminNotificate(INTERNAL_ERROR, fmt.Errorf("obtain %s alert logs: %w", at.name, err))
+				go s.sendAdminNotification(INTERNAL_ERROR, fmt.Errorf("obtain %s alert logs: %w", at.name, err))
 				continue
 			}
 		}
@@ -383,24 +383,15 @@ func (s *Service) alertWorker(ctx context.Context, alertset *datastructs.AlertSe
 				}
 			}
 		}
+
 		s.log.Tracef("Alert Worker:for application:%s %s try send %s ALERTS", alertset.ServerName, alertset.ServiceName, at.name)
-		if err := s.trySendAlertEmail(ctx, at.name, alertset, sendPool); err != nil {
-			s.log.Errorf("Alert Worker: %s for application:%s %s try send alerts email: %s", at.name, alertset.ServerName, alertset.ServiceName, err)
-			continue
-		}
-		//выставить флаги удачной рассылки для ids
-		var ids []int64
-		for _, data := range sendPool {
-			ids = append(ids, data.RecordID)
-		}
-		s.log.Tracef("Alert Worker:for application:%s %s set send TRUE flags: %d %s ALERTS", alertset.ServerName, alertset.ServiceName, len(ids), at.name)
-		if err := s.store.SetSendFlag(ctx, ids); err != nil {
-			s.log.Errorf("Alert Worker: %s for application:%s %s set send TRUE flags: %s", at.name, alertset.ServerName, alertset.ServiceName, err)
-			go s.sendAdminNotificate(INTERNAL_ERROR, fmt.Errorf("set send TRUE flags: %w", err))
-		}
+		// if err := s.sendAlertNotification(ctx, at.name, alertset, sendPool); err != nil {
+		// 	s.log.Errorf("Alert Worker: %s for application:%s %s try send alerts notification: %s", at.name, alertset.ServerName, alertset.ServiceName, err)
+		// 	continue
+		// }
+		go s.sendAlertNotification(ctx, at.name, alertset, sendPool)
 
 		time.Sleep(1 * time.Second)
-		// time.Sleep(at.sendPeriod)
 	}
 }
 
@@ -414,27 +405,6 @@ func contains(text string, phrases []string) bool {
 		}
 	}
 	return false
-}
-
-func (s *Service) trySendAlertEmail(ctx context.Context, typeAlert string, alertset *datastructs.AlertSettings, pool []datastructs.AlertLog) error {
-
-	for tries := 0; tries < s.cfg.NumAttemptsFail; tries++ {
-		select {
-		case <-ctx.Done():
-			return errors.New("termination command received")
-		default:
-			err := s.sendUserNotificate(alertset, pool)
-			if err == nil {
-				return nil
-			}
-			s.log.Errorf("Tries: %d | Could not send emails with %s alerts for %s %s: %s", tries+1, typeAlert, alertset.ServerName, alertset.ServiceName, err)
-			if tries+1 < s.cfg.NumAttemptsFail {
-				time.Sleep(time.Second << uint(tries))
-			}
-		}
-
-	}
-	return errors.New("all attempts have been exhausted")
 }
 
 func (s *Service) registrInternalError(err error, tn int64) {

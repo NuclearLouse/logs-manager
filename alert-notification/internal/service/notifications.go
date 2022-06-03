@@ -2,6 +2,7 @@ package service
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"html/template"
 	"io"
@@ -66,7 +67,7 @@ type dataTemplate struct {
 	AlertLogs []datastructs.AlertLog
 }
 
-func (s *Service) sendAdminNotificate(typeNotificate notificate, internalError ...error) {
+func (s *Service) sendAdminNotification(typeNotificate notificate, internalError ...error) {
 	s.log.Debugln("try send admin notification:", typeNotificate.String())
 	if internalError != nil {
 		s.log.Debug("check time last send notification")
@@ -129,8 +130,7 @@ func (s *Service) getAdminAddresses(notificator string) []string {
 Для отправки в Битрикс - просто в шаблоне будет указываться, чтоб смотрели емейл
 */
 
-func (s *Service) sendUserNotificate(alertset *datastructs.AlertSettings, pool []datastructs.AlertLog) error {
-
+func (s *Service) sendAlertNotification(ctx context.Context, typeAlert string, alertset *datastructs.AlertSettings, pool []datastructs.AlertLog) {
 	header := ALERT.makeSubject(alertset.ServerName, alertset.ServiceName)
 	data := dataTemplate{
 		Header:    header,
@@ -152,28 +152,91 @@ func (s *Service) sendUserNotificate(alertset *datastructs.AlertSettings, pool [
 		buf := new(bytes.Buffer)
 		for _, l := range pool {
 			if _, err := io.WriteString(buf, l.Log.Message+"\n"); err != nil {
-				return err
+				s.log.Errorf("Alert Worker: [%s] alert [%s] from %s: %s", typeAlert, alertset.ServiceName, alertset.ServerName, err)
+				return
 			}
 		}
 		attach.Content = buf
 		attach.ContentType = "text/plain"
 
 	}
-	for senderName, sender := range s.notificator {
+
+	successChan := make(chan error, len(s.notificator))
+	//если хоть один нотификатор сработал, то надо выставлять флаг успешной отправки
+	for key, value := range s.notificator {
+		senderName := key
+		sender := value
 		body := new(bytes.Buffer)
 		err := template.Must(template.ParseFiles(filepath.Join("templates", senderName, tmplName+".tmpl"))).Execute(body, data)
 		if err != nil {
-			return err
+			s.log.Errorf("Alert Worker: [%s] alert [%s] from %s: %s", typeAlert, alertset.ServiceName, alertset.ServerName, err)
+			return
 		}
-		if err := sender.SendMessage(
-			notification.Message{
-				Addresses: alertset.GetUserAddresses(senderName),
-				Content:   body,
-				Subject:   header,
-			},
-			attach); err != nil {
-			return err
+		message := notification.Message{
+			Addresses: alertset.GetUserAddresses(senderName),
+			Content:   body,
+			Subject:   header,
+		}
+		go s.trySendMessage(ctx, typeAlert, alertset, senderName, sender, message, attach, successChan)
+	}
+
+	var i int
+	for {
+		if i == len(s.notificator) {
+			close(successChan)
+			break
+		}
+		select {
+		case <-ctx.Done():
+			s.log.Error("Alert Worker: termination command received")
+			return
+		case err := <-successChan:
+			i++
+			if err == nil {
+				//выставить флаги удачной рассылки для ids если хоть один из нотификаторов вернулся без ошибки
+				var ids []int64
+				for _, data := range pool {
+					ids = append(ids, data.RecordID)
+				}
+				s.log.Tracef("Alert Worker:for application:%s %s set send TRUE flags: %d %s ALERTS", alertset.ServerName, alertset.ServiceName, len(ids), typeAlert)
+				if err := s.store.SetSendFlag(ctx, ids); err != nil {
+					s.log.Errorf("Alert Worker: %s for application:%s %s set send TRUE flags: %s", typeAlert, alertset.ServerName, alertset.ServiceName, err)
+					go s.sendAdminNotification(INTERNAL_ERROR, fmt.Errorf("set send TRUE flags: %w", err))
+				}
+				return
+			}
+		default:
+			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	return nil
+
+}
+
+func (s *Service) trySendMessage(
+	ctx context.Context,
+	typeAlert string,
+	alertset *datastructs.AlertSettings,
+	senderName string,
+	sender notification.Notificator,
+	message notification.Message,
+	attach notification.Attachment,
+	success chan error) {
+
+	for tries := 0; tries < s.cfg.NumAttemptsFail; tries++ {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			err := sender.SendMessage(message, attach)
+			if err == nil {
+				success <- nil
+				return
+			}
+			s.log.Errorf("Tries: %d | Could not send emails with [%s] alerts for [%s] from %s: %s", tries+1, typeAlert, alertset.ServiceName, alertset.ServerName, err)
+			if tries+1 < s.cfg.NumAttemptsFail {
+				time.Sleep(time.Second << uint(tries))
+			}
+		}
+	}
+	success <- fmt.Errorf("Could not send emails with [%s] alerts for [%s] from %s: all attempts have been exhausted", typeAlert, alertset.ServiceName, alertset.ServerName)
 }

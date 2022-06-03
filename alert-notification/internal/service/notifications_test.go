@@ -1,13 +1,12 @@
 package service
 
 import (
+	"context"
 	"testing"
 
-	"redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/datastructs"
-
 	"github.com/golang/mock/gomock"
+	"redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/datastructs"
 	"redits.oculeus.com/asorokin/notification"
-
 	mock "redits.oculeus.com/asorokin/notification/mock"
 )
 
@@ -45,29 +44,28 @@ func TestService_sendAdminNotificate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.s.sendAdminNotificate(tt.args.typeNotificate, tt.args.internalError...)
+			tt.s.sendAdminNotification(tt.args.typeNotificate, tt.args.internalError...)
 		})
 	}
 }
 
-func TestService_sendUserNotificate(t *testing.T) {
+func TestService_sendAlertNotification(t *testing.T) {
 	type args struct {
-		alertset *datastructs.AlertSettings
-		pool     []datastructs.AlertLog
+		ctx       context.Context
+		typeAlert string
+		alertset  *datastructs.AlertSettings
+		pool      []datastructs.AlertLog
 	}
 	tests := []struct {
-		name    string
-		s       *Service
-		args    args
-		wantErr bool
+		name string
+		s    *Service
+		args args
 	}{
 		// TODO: Add test cases.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.s.sendUserNotificate(tt.args.alertset, tt.args.pool); (err != nil) != tt.wantErr {
-				t.Errorf("Service.sendUserNotificate() error = %v, wantErr %v", err, tt.wantErr)
-			}
+			tt.s.sendAlertNotification(tt.args.ctx, tt.args.typeAlert, tt.args.alertset, tt.args.pool)
 		})
 	}
 }

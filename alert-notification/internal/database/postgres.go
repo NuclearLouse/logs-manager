@@ -20,7 +20,7 @@ func New(pool *pgxpool.Pool) *Postgres {
 func (db *Postgres) GetSignalDB(ctx context.Context) (*datastructs.ServiceControl, error) {
 	var signal datastructs.ServiceControl
 	if err := db.QueryRow(ctx,
-		"SELECT stop_service, reload_config FROM logs_manager.alert_email_control;",
+		"SELECT stop_service, reload_config FROM logs_manager.alert_notification_control;",
 	).Scan(
 		&signal.Stop,
 		&signal.Reload,
@@ -32,7 +32,7 @@ func (db *Postgres) GetSignalDB(ctx context.Context) (*datastructs.ServiceContro
 
 func (db *Postgres) ResetFlags(ctx context.Context) error {
 	if _, err := db.Exec(ctx,
-		"UPDATE logs_manager.alert_email_control SET stop_service=false, reload_config=false"); err != nil {
+		"UPDATE logs_manager.alert_notification_control SET stop_service=false, reload_config=false"); err != nil {
 		return err
 	}
 	return nil
