@@ -1,5 +1,5 @@
 VERSION_AGENT=3.0.0
-VERSION_ALERT=4.0.0
+VERSION_ALERT=4.0.1
 LDFLAGS_AGENT=-ldflags "-X redits.oculeus.com/asorokin/logs-manager-src/agent-bit-control/internal/service.version=${VERSION_AGENT} -X redits.oculeus.com/asorokin/logs-manager-src/agent-bit-control/internal/service.cfgFile=.yaml"
 LDFLAGS_ALERT=-ldflags "-X redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/service.version=${VERSION_ALERT} -X redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/service.cfgFile=.yaml"
 LDFLAGS_AGENT_DEV=-ldflags "-X redits.oculeus.com/asorokin/logs-manager-src/agent-bit-control/internal/service.version=${VERSION_AGENT} -X redits.oculeus.com/asorokin/logs-manager-src/agent-bit-control/internal/service.cfgFile=dev.yaml"
