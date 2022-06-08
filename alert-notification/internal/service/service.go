@@ -14,6 +14,7 @@ import (
 	"redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/datastructs"
 
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"redits.oculeus.com/asorokin/connect/postgres"
 	"redits.oculeus.com/asorokin/logging"
 	"redits.oculeus.com/asorokin/notification"
@@ -23,6 +24,8 @@ import (
 
 	"github.com/NuclearLouse/scheduler"
 	conf "github.com/tinrab/kit/cfg"
+
+	"github.com/hashicorp/go-multierror"
 )
 
 var (
@@ -33,16 +36,18 @@ var (
 const serviceName = "Alert-Service"
 
 type Service struct {
-	cfg         *config
-	log         *logging.Logger
-	store       storer
-	notificator map[string]notification.Notificator
-	stop        chan struct{}
-	reload      chan struct{}
-	servedApps  map[int]context.CancelFunc
-	sync.RWMutex
-	journalUrgentAlertLog map[int]int64
-	journalInternalErrors map[string]int64
+	cfg        *config
+	log        *logging.Logger
+	store      storer
+	senders    []notification.Notificator
+	stop       chan struct{}
+	reload     chan struct{}
+	servedApps map[int]context.CancelFunc
+	// sync.RWMutex
+	// journalUrgentAlertLog map[int]time.Time
+	// journalInternalErrors map[string]time.Time
+	journalUrgentAlertLog sync.Map
+	journalInternalErrors sync.Map
 }
 
 type config struct {
@@ -50,8 +55,8 @@ type config struct {
 	StartCleanOldLogs   string           `cfg:"start_clean_old_logs"`
 	CheckRegularAlerts  time.Duration    `cfg:"check_regular_alerts"`
 	CheckUrgentAlerts   time.Duration    `cfg:"check_urgent_alerts"`
-	SendUrgentPeriod    int64            `cfg:"send_urgent_period"`
-	SendErrorPeriod     int64            `cfg:"send_error_period"`
+	SendUrgentPeriod    time.Duration    `cfg:"send_urgent_period"`
+	SendErrorPeriod     time.Duration    `cfg:"send_error_period"`
 	NumLogsAttach       int              `cfg:"num_logs_for_attach"`
 	NumAttemptsFail     int              `cfg:"num_attempts_fail"`
 	AdminEmails         []string         `cfg:"admin_emails"`
@@ -94,24 +99,27 @@ func New() (*Service, error) {
 	}
 
 	return &Service{
-		cfg:                   cfg,
-		log:                   logging.New(cfg.Logger),
-		stop:                  make(chan struct{}, 1),
-		reload:                make(chan struct{}, 1),
-		journalUrgentAlertLog: make(map[int]int64),
-		journalInternalErrors: make(map[string]int64),
-		servedApps:            make(map[int]context.CancelFunc),
-		notificator:           make(map[string]notification.Notificator),
+		cfg:    cfg,
+		log:    logging.New(cfg.Logger),
+		stop:   make(chan struct{}, 1),
+		reload: make(chan struct{}, 1),
+		// journalUrgentAlertLog: make(map[int]time.Time),
+		// journalInternalErrors: make(map[string]time.Time),
+		servedApps: make(map[int]context.CancelFunc),
+		senders:    make([]notification.Notificator, len(cfg.Notification.Enabled)),
 	}, nil
 }
 
+//TODO: Переделать логи!!
+
 func (s *Service) Start() {
 	s.log.Infof("***********************SERVICE [%s] START***********************", version)
+	flog := s.log.WithField("Root", "Service")
 	mainCtx, globCancel := context.WithCancel(context.Background())
 	defer globCancel()
 	pool, err := postgres.Connect(mainCtx, s.cfg.Postgres)
 	if err != nil {
-		s.log.Fatalln("Service: database connect:", err)
+		flog.Fatalln("database connect:", err)
 	}
 
 	s.store = database.New(pool)
@@ -120,20 +128,20 @@ func (s *Service) Start() {
 
 		switch messenger {
 		case "email":
-			s.notificator[messenger] = email.New(s.cfg.Notification.Email)
+			s.senders = append(s.senders, email.New(s.cfg.Notification.Email))
 		case "telegram":
-			s.notificator[messenger] = telegram.New(s.cfg.Notification.Telegram)
+			s.senders = append(s.senders, telegram.New(s.cfg.Notification.Telegram))
 		case "bitrix":
-			s.notificator[messenger] = bitrix.New(s.cfg.Notification.Bitrix)
+			s.senders = append(s.senders, bitrix.New(s.cfg.Notification.Bitrix))
 		}
-		s.log.Debugf("Added Notificator: %s : %#v", messenger, s.notificator[messenger])
+		s.log.Debugf("Added Notificator: %s : %#v", messenger, s.senders)
 	}
-	if len(s.notificator) == 0 {
-		s.log.Fatal("Service: no connected notificators")
+	if len(s.senders) == 0 {
+		flog.Fatal("no connected notificators")
 	}
 	s.logconfigInfo()
 
-	go s.sendAdminNotification(TEST_CONNECT)
+	go s.sendAdminNotification(TEST)
 
 	go s.monitorSignalOS(mainCtx)
 	go s.monitorSignalDB(mainCtx)
@@ -145,7 +153,7 @@ func (s *Service) Start() {
 
 	var wgWorkers sync.WaitGroup
 	if err := s.startAllAlertWorkers(mainCtx, &wgWorkers); err != nil {
-		s.log.Fatalln("Service: start alert workers:", err)
+		flog.Fatalln("start alert workers:", err)
 	}
 
 CONTROL:
@@ -162,7 +170,9 @@ CONTROL:
 			}
 			wgWorkers.Wait()
 			if err := s.startAllAlertWorkers(mainCtx, &wgWorkers); err != nil {
-				s.log.Fatalln("Service: start alert workers:", err)
+				flog.Errorln("start alert workers:", err)
+				s.sendAdminNotification(ERROR, err)
+				//TODO: пробовать опять спустя время
 			}
 
 		default:
@@ -172,23 +182,24 @@ CONTROL:
 
 	wgWorkers.Wait()
 	globCancel()
-	s.log.Info("Database connection closed")
+	flog.Info("database connection closed")
 	s.log.Info("***********************SERVICE STOP************************")
 }
 
 func (s *Service) monitorSignalOS(ctx context.Context) {
-	s.log.Info("Monitor signal OS: start monitor OS.Signal")
+	flog := s.log.WithField("Root", "Monitor signal OS")
+	flog.Info("start monitor OS.Signal")
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig)
 	for {
 		select {
 		case <-ctx.Done():
-			s.log.Warn("Monitor signal OS: stop monitor OS.Sygnal")
+			flog.Warn("stop monitor OS.Sygnal")
 			return
 		case c := <-sig:
 			switch c {
 			case syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGABRT:
-				s.log.Infof("Monitor signal OS: signal recived: %v", c)
+				flog.Infof("signal recived: %v", c)
 				s.stop <- struct{}{}
 				return
 			}
@@ -198,30 +209,31 @@ func (s *Service) monitorSignalOS(ctx context.Context) {
 }
 
 func (s *Service) monitorSignalDB(ctx context.Context) {
-	s.log.Info("Monitor signal DB: start monitor user-interface")
+	flog := s.log.WithField("Root", "Monitor signal DB")
+	flog.Info("start monitor user-interface")
 	for {
 		select {
 		case <-ctx.Done():
-			s.log.Warn("Monitor signal DB: stop monitor user-interface")
+			flog.Warn("stop monitor user-interface")
 			return
 		default:
 			sig, err := s.store.GetSignalDB(ctx)
 			if err != nil {
-				s.log.Errorln("Monitor signal DB: read control signals:", err)
-				go s.sendAdminNotification(INTERNAL_ERROR, fmt.Errorf("read control signals from DB: %w", err))
+				flog.Errorln("read control signals:", err)
+				go s.sendAdminNotification(ERROR, fmt.Errorf("read control signals from DB: %w", err))
 			}
 			switch {
 			case sig.Stop:
-				s.log.Info("Monitor signal DB: stop signal received")
+				s.log.Info("stop signal received")
 				if err := s.store.ResetFlags(ctx); err != nil {
-					s.log.Errorln("Monitor signal DB: reset control flags:", err)
+					flog.Errorln("reset control flags:", err)
 				}
 				s.stop <- struct{}{}
 				return
 			case sig.Reload:
-				s.log.Info("Monitor signal DB: reload config signal received")
+				s.log.Info("reload config signal received")
 				if err := s.store.ResetFlags(ctx); err != nil {
-					s.log.Errorln("Monitor signal DB: reset control flags:", err)
+					flog.Errorln("reset control flags:", err)
 				}
 				s.reload <- struct{}{}
 			}
@@ -231,16 +243,17 @@ func (s *Service) monitorSignalDB(ctx context.Context) {
 }
 
 func (s *Service) checkPgAgent(ctx context.Context) {
-	s.log.Info("Check health Pg-Agent: start scheduler")
+	flog := s.log.WithField("Root", "Check health Pg-Agent")
+	flog.Info("start scheduler")
 	for {
 		select {
 		case <-ctx.Done():
-			s.log.Warn("Check health Pg-Agent: stop scheduler")
+			flog.Warn("stop scheduler")
 			return
 		default:
 			if err := s.store.CheckPgAgent(ctx); err != nil {
-				s.log.Errorln("Check health Pg-Agent: invoke function public.pgagent_jobs_check():", err)
-				go s.sendAdminNotification(INTERNAL_ERROR, err)
+				flog.Errorln("invoke function public.pgagent_jobs_check():", err)
+				go s.sendAdminNotification(ERROR, err)
 			}
 		}
 		time.Sleep(24 * time.Hour)
@@ -248,14 +261,15 @@ func (s *Service) checkPgAgent(ctx context.Context) {
 }
 
 func (s *Service) cleanerOldLogs(ctx context.Context) {
+	flog := s.log.WithField("Root", "Cleaner DB")
 	alarm := make(chan time.Time)
 	signal := func() {
 		alarm <- time.Now()
 	}
 	sig, err := scheduler.Every().Day().At(s.cfg.StartCleanOldLogs).Run(signal)
 	if err != nil {
-		s.log.Errorln("Cleaner DB: create scheduler:", err)
-		s.log.Warn("Cleaner DB: the cleaning schedule will be set to the current time")
+		flog.Errorln("create scheduler:", err)
+		flog.Warn("the cleaning schedule will be set to the current time")
 		go func() {
 			for {
 				alarm <- time.Now()
@@ -267,18 +281,18 @@ CLEANER:
 	for {
 		select {
 		case <-ctx.Done():
-			s.log.Warn("Cleaner DB: stop worker and scheduler")
+			flog.Warn("stop worker and scheduler")
 			sig.Quit <- true
 			break CLEANER
 		case <-alarm:
 			clearDataStatistic, err := s.store.DeleteOldLogs(ctx)
 			if err != nil {
-				s.log.Errorln("Cleaner DB: cleaning the database from old logs:", err)
-				go s.sendAdminNotification(INTERNAL_ERROR, err)
+				flog.Errorln("cleaning the database from old logs:", err)
+				go s.sendAdminNotification(ERROR, err)
 				continue
 			}
 			for _, cd := range clearDataStatistic {
-				s.log.Infof("Cleaner DB: Server[%s] Application[%s] delete all_logs:%d | alert_logs:%d",
+				flog.Infof("server:[%s] application:[%s] deleted all_logs:%d | alert_logs:%d",
 					cd.ServerName,
 					cd.ServiceName,
 					cd.AllLogs,
@@ -316,10 +330,15 @@ func (s *Service) startAllAlertWorkers(ctx context.Context, wgWorkers *sync.Wait
 }
 
 func (s *Service) alertWorker(ctx context.Context, alertset *datastructs.AlertSettings, at alertType, wg *sync.WaitGroup) {
-
-	s.log.Infof("Alert Worker: start %s alert worker for application:%s %s", at.name, alertset.ServerName, alertset.ServiceName)
+	flog := s.log.WithFields(logrus.Fields{
+		"Root":    "Alert Worker",
+		"Type":    at.name,
+		"Server":  alertset.ServerName,
+		"Service": alertset.ServiceName,
+	})
+	flog.Info("start worker")
 	ticker := time.NewTicker(at.sendPeriod)
-	s.log.Tracef("Alert Worker:for application:%s %s create new ticker for check alerts %s with period: %.f minute", alertset.ServerName, alertset.ServiceName, at.name, at.sendPeriod.Minutes())
+	flog.Tracef("create new ticker for check alerts with period: %s", at.sendPeriod)
 	defer wg.Done()
 	for {
 		var (
@@ -328,70 +347,71 @@ func (s *Service) alertWorker(ctx context.Context, alertset *datastructs.AlertSe
 		)
 		select {
 		case <-ctx.Done():
-			s.log.Warnf("Alert Worker: stop %s alert worker for application:%s %s", at.name, alertset.ServerName, alertset.ServiceName)
+			flog.Warn("stop worker")
 			return
 		case <-ticker.C:
-			s.log.Tracef("Alert Worker:for application:%s %s check %s ALERTS", alertset.ServerName, alertset.ServiceName, at.name)
+			flog.Trace("check alerts")
 			alerts, err = s.store.AlertLogs(ctx, alertset.ServiceID)
 			if err != nil {
-				s.log.Errorf("Alert Worker: %s for application:%s %s obtain %s alert logs: %s", at.name, alertset.ServerName, alertset.ServiceName, at.name, err)
-				go s.sendAdminNotification(INTERNAL_ERROR, fmt.Errorf("obtain %s alert logs: %w", at.name, err))
+				flog.Errorf("obtain alert logs: %s", err)
+				go s.sendAdminNotification(ERROR, fmt.Errorf("obtain %s alert logs: %w", at.name, err))
 				continue
 			}
-		}
-		s.log.Tracef("Alert Worker:for application:%s %s obtain:%d all unsend alerts", alertset.ServerName, alertset.ServiceName, len(alerts))
-		if len(alerts) == 0 {
-			continue
-		}
+			if len(alerts) == 0 {
+				continue
+			}
 
-		//разделяю полученные логи на срочные и ежечасные в зависимости от воркера
-		var sendPool []datastructs.AlertLog
-		for _, a := range alerts {
-			switch {
-			case at.name == "URGENT":
-				if !alertset.SendUrgent {
-					continue
-				}
-				if len(alertset.IfMessageContains) != 0 {
-					if !contains(a.Log.Message, alertset.IfMessageContains) {
+			//разделяю полученные логи на срочные и ежечасные в зависимости от воркера
+			var sendPool []datastructs.AlertLog
+			for _, a := range alerts {
+				switch {
+				case at.name == "URGENT":
+					if !alertset.SendUrgent {
+						continue
+					}
+					if len(alertset.IfMessageContains) != 0 {
+						if !contains(a.Log.Message, alertset.IfMessageContains) {
+							continue
+						}
+					}
+
+				case at.name == "REGULAR":
+					if alertset.SendUrgent {
 						continue
 					}
 				}
+				sendPool = append(sendPool, a)
+			}
 
-			case at.name == "REGULAR":
-				if alertset.SendUrgent {
+			if len(sendPool) == 0 {
+				continue
+			}
+
+			flog.Tracef("obtain:%d all unsend alerts", len(sendPool))
+
+			//Надо проверять, что для данного сервиса уже истек интервал отсылки срочных логов
+			if at.name == "URGENT" {
+				flog.Trace("check send last urgent")
+				if !s.expirePeriodSendLastUrgent(alertset.ServiceID, time.Now()) {
+					flog.Trace("last send urgent not expired period")
 					continue
 				}
 			}
-			sendPool = append(sendPool, a)
-		}
 
-		s.log.Tracef("Alert Worker:for application:%s %s obtain:%d %s ALERTS", alertset.ServerName, alertset.ServiceName, len(sendPool), at.name)
-		if len(sendPool) == 0 {
-			continue
-		}
+			flog.Trace("try send alerts")
 
-		//Надо проверять, что для данного сервиса уже истек интервал отсылки срочных логов
-		if at.name == "URGENT" {
-			s.log.Tracef("Alert Worker:for application:%s %s check send last urgent", alertset.ServerName, alertset.ServiceName)
-			timeNow := time.Now().Unix()
-			lastSend := s.checkSendLastUrgent(alertset.ServiceID, timeNow)
-			s.log.Tracef("Alert Worker:for application:%s %s last send urgent:%s", alertset.ServerName, alertset.ServiceName, time.Unix(lastSend, 0))
-			if lastSend != 0 {
-				if (timeNow-lastSend)/60 <= s.cfg.SendUrgentPeriod {
-					continue
+			if err := s.sendAlertNotification(ctx, at.name, alertset, sendPool); err != nil {
+				if muerr, ok := err.(*multierror.Error); ok {
+					if muerr.ErrorOrNil() != nil {
+						flog.Errorf("not all messages completed successfully - %s", muerr)
+					}
 				}
 			}
+
+		default:
+			time.Sleep(1 * time.Second)
 		}
 
-		s.log.Tracef("Alert Worker:for application:%s %s try send %s ALERTS", alertset.ServerName, alertset.ServiceName, at.name)
-		// if err := s.sendAlertNotification(ctx, at.name, alertset, sendPool); err != nil {
-		// 	s.log.Errorf("Alert Worker: %s for application:%s %s try send alerts notification: %s", at.name, alertset.ServerName, alertset.ServiceName, err)
-		// 	continue
-		// }
-		go s.sendAlertNotification(ctx, at.name, alertset, sendPool)
-
-		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -407,46 +427,26 @@ func contains(text string, phrases []string) bool {
 	return false
 }
 
-func (s *Service) registrInternalError(err error, tn int64) {
-	s.Lock()
-	if s.journalInternalErrors == nil {
-		s.journalInternalErrors = make(map[string]int64)
-	}
-	s.journalInternalErrors[err.Error()] = tn
-	s.Unlock()
-}
-
-func (s *Service) checkSendLastInternalError(err error, tn int64) int64 {
-	s.RLock()
-	t, ok := s.journalInternalErrors[err.Error()]
+func (s *Service) expirePeriodSendLastInternalError(err string, tn time.Time) bool {
+	ti, ok := s.journalInternalErrors.Load(err)
 	if ok {
-		s.RUnlock()
-		return t
+		if tn.Sub(ti.(time.Time)) <= s.cfg.SendErrorPeriod {
+			return false
+		}
 	}
-	s.RUnlock()
-	s.registrInternalError(err, tn)
-	return 0
+	s.journalInternalErrors.Store(err, tn)
+	return true
 }
 
-func (s *Service) registrUrgent(appID int, tn int64) {
-	s.Lock()
-	if s.journalUrgentAlertLog == nil {
-		s.journalUrgentAlertLog = make(map[int]int64)
-	}
-	s.journalUrgentAlertLog[appID] = tn
-	s.Unlock()
-}
-
-func (s *Service) checkSendLastUrgent(appID int, tn int64) int64 {
-	s.RLock()
-	t, ok := s.journalUrgentAlertLog[appID]
+func (s *Service) expirePeriodSendLastUrgent(appID int, tn time.Time) bool {
+	ti, ok := s.journalUrgentAlertLog.Load(appID)
 	if ok {
-		s.RUnlock()
-		return t
+		if tn.Sub(ti.(time.Time)) <= s.cfg.SendUrgentPeriod {
+			return false
+		}
 	}
-	s.RUnlock()
-	s.registrUrgent(appID, tn)
-	return 0
+	s.journalUrgentAlertLog.Store(appID, tn)
+	return true
 }
 
 func (s *Service) logconfigInfo() {
@@ -509,7 +509,7 @@ Email:
 		s.cfg.AdminEmails,
 	)
 	s.log.Debug("Check Notificators:")
-	for name, notif := range s.notificator {
-		s.log.Debugln(name, " = ", notif != nil)
+	for _, name := range s.senders {
+		s.log.Debugln(name.String(), " = OK!")
 	}
 }

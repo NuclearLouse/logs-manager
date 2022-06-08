@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS logs_manager.agent_bit_control (
     CONSTRAINT pk_agent_bit_control PRIMARY KEY (server_name)
 );
 -----------------------------------------------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS logs_manager.alert_email_control (
+CREATE TABLE IF NOT EXISTS logs_manager.alert_notification_control (
     stop_service boolean NOT NULL DEFAULT false,
     reload_config boolean NOT NULL DEFAULT false
 );

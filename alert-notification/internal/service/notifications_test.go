@@ -23,8 +23,8 @@ func TestService_sendAdminNotificate(t *testing.T) {
 		cfg: &config{
 			ServerName: "Work Notebook",
 		},
-		notificator: map[string]notification.Notificator{
-			"email": mock.NewMockNotificator(ctrl),
+		senders: []notification.Notificator{
+			mock.NewMockNotificator(ctrl),
 		},
 	}
 
@@ -38,7 +38,7 @@ func TestService_sendAdminNotificate(t *testing.T) {
 			name: "Send Test Connect",
 			s:    s,
 			args: args{
-				typeNotificate: TEST_CONNECT,
+				typeNotificate: TEST,
 			},
 		},
 	}

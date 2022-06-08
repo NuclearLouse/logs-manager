@@ -1,6 +1,6 @@
 table_all_logs     : all_logs
 table_alerts_logs  : alert_logs
-fluent_service_file: td-agent-bit.service
+fluent_service_file: fluent-bit.service
 path_fluent_config : /home/logs-manager/fluent-bit/conf/fluent-bit.conf
 server_name        : Work Notebook
 user_name          : userNotRoot

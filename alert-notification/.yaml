@@ -1,8 +1,8 @@
 server_name          : Server Name
 check_urgent_alerts  : 1m 
 check_regular_alerts : 60m 
-send_error_period    : 10 # minute
-send_urgent_period   : 10 # minute
+send_error_period    : 10m
+send_urgent_period   : 10m
 start_clean_old_logs : 00:00:00
 num_attempts_fail    : 10
 num_logs_for_attach  : 20
