@@ -76,11 +76,12 @@ func New() (*Service, error) {
 
 func (s *Service) Start() {
 	s.log.Infof("***********************SERVICE [%s] START***********************", version)
+	flog := s.log.WithField("Root", "Service")
 	mainCtx, globCancel := context.WithCancel(context.Background())
 	defer globCancel()
 	pool, err := postgres.Connect(mainCtx, s.cfg.Postgres)
 	if err != nil {
-		s.log.Fatalln("Service: database connect:", err)
+		flog.Fatalln("database connect:", err)
 	}
 
 	s.store = database.New(pool)
@@ -98,23 +99,24 @@ CONTROL:
 		}
 	}
 	globCancel()
-	s.log.Info("Database connection closed")
+	flog.Info("database connection closed")
 	s.log.Info("***********************SERVICE STOP************************")
 }
 
 func (s *Service) monitorSignalOS(ctx context.Context) {
-	s.log.Info("Monitor signal OS: start monitor OS.Signal")
+	flog := s.log.WithField("Root", "Monitor signal OS")
+	flog.Info("start monitor OS.Signal")
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig)
 	for {
 		select {
 		case <-ctx.Done():
-			s.log.Info("Monitor signal OS: stop monitor OS.Sygnal")
+			flog.Warn("stop monitor OS.Sygnal")
 			return
 		case c := <-sig:
 			switch c {
 			case syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGKILL, syscall.SIGABRT:
-				s.log.Infof("Monitor signal OS: signal recived: %v", c)
+				flog.Infof("signal recived: %v", c)
 				s.stop <- struct{}{}
 				return
 			}
@@ -124,29 +126,31 @@ func (s *Service) monitorSignalOS(ctx context.Context) {
 }
 
 func (s *Service) monitorSignalDB(ctx context.Context) {
-	s.log.Info("Monitor signal DB: start monitor user-interface")
+	flog := s.log.WithField("Root", "Monitor signal DB")
+	flog.Info("start monitor user-interface")
 	for {
 		select {
 		case <-ctx.Done():
-			s.log.Info("Monitor signal DB: stop monitor user-interface")
+			flog.Warn("stop monitor user-interface")
 			return
 		default:
 			sig, err := s.store.GetSignalDB(ctx, s.cfg.ServerName)
 			if err != nil {
-				s.log.Errorln("Monitor signal DB: read control signals:", err)
+				flog.Errorln("read control signals:", err)
 			}
 			switch {
 			case sig.Stop:
-				s.log.Info("Monitor signal DB: stop signal received")
+				flog.Info("stop signal received")
 				if err := s.store.ResetFlags(ctx, s.cfg.ServerName); err != nil {
-					s.log.Errorln("Monitor signal DB: reset control flags:", err)
+					flog.Errorln("reset control flags:", err)
 				}
 				s.stop <- struct{}{}
 				return
 			case sig.Reload:
-				s.log.Info("Monitor signal DB: reload config signal received")
+				s.log.Info("reload config signal received")
 				if err := func() error {
 					//TODO: Надо сохранить в переменную весь файл и при любой ошибке откатываться на старый конфиг
+					//TODO: не надо выходить из функции с ошибкой!
 					data, err := s.readServiceBlock()
 					if err != nil {
 						return fmt.Errorf("read config file service block: %w", err)
@@ -178,11 +182,11 @@ func (s *Service) monitorSignalDB(ctx context.Context) {
 					}
 					return nil
 				}(); err != nil {
-					s.log.Errorln("Monitor signal DB: reload td-agent-bit:", err)
+					flog.Errorln("reload td-agent-bit:", err)
 				}
 				if err := s.store.ResetFlags(ctx,
 					s.cfg.ServerName); err != nil {
-					s.log.Errorln("Monitor signal DB: reset control flags:", err)
+					flog.Errorln("reset control flags:", err)
 				}
 			}
 		}

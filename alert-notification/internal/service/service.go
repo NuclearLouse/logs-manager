@@ -110,7 +110,6 @@ func New() (*Service, error) {
 	}, nil
 }
 
-//TODO: Переделать логи!!
 
 func (s *Service) Start() {
 	s.log.Infof("***********************SERVICE [%s] START***********************", version)
@@ -224,7 +223,7 @@ func (s *Service) monitorSignalDB(ctx context.Context) {
 			}
 			switch {
 			case sig.Stop:
-				s.log.Info("stop signal received")
+				flog.Info("stop signal received")
 				if err := s.store.ResetFlags(ctx); err != nil {
 					flog.Errorln("reset control flags:", err)
 				}
