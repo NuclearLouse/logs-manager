@@ -178,11 +178,11 @@ func (s *Service) monitorSignalDB(ctx context.Context) {
 					}
 
 					if err := s.restartAgent(); err != nil {
-						return fmt.Errorf("restart td-agent-bit.service: %w", err)
+						return fmt.Errorf("restart fluent-bit.service: %w", err)
 					}
 					return nil
 				}(); err != nil {
-					flog.Errorln("reload td-agent-bit:", err)
+					flog.Errorln("reload fluent-bit:", err)
 				}
 				if err := s.store.ResetFlags(ctx,
 					s.cfg.ServerName); err != nil {
@@ -224,7 +224,7 @@ func (s *Service) restartAgent() error {
 			},
 		}
 	default:
-		// echo 'PASSWORD' | sudo -S systemctl stop td-agent-bit.service
+		// echo 'PASSWORD' | sudo -S systemctl stop fluent-bit.service
 		commands = []coms{
 			{
 				command: "echo",
@@ -310,7 +310,7 @@ func (s *Service) defaultConfigServiceBlock() ([]string, error) {
 		Flush:           "5",
 		Daemon:          "off",
 		LogLevel:        "info",
-		PluginsConfFile: "/etc/td-agent-bit/plugins.conf",
+		PluginsConfFile: "/etc/fluent-bit/plugins.conf",
 		HTTPServer:      "off",
 		StorageMetrics:  "on",
 	}
