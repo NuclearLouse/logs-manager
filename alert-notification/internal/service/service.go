@@ -36,16 +36,13 @@ var (
 const serviceName = "Alert-Service"
 
 type Service struct {
-	cfg        *config
-	log        *logging.Logger
-	store      storer
-	senders    []notification.Notificator
-	stop       chan struct{}
-	reload     chan struct{}
-	servedApps map[int]context.CancelFunc
-	// sync.RWMutex
-	// journalUrgentAlertLog map[int]time.Time
-	// journalInternalErrors map[string]time.Time
+	cfg                   *config
+	log                   *logging.Logger
+	store                 storer
+	senders               []notification.Notificator
+	stop                  chan struct{}
+	reload                chan struct{}
+	servedApps            map[int]context.CancelFunc
 	journalUrgentAlertLog sync.Map
 	journalInternalErrors sync.Map
 }
@@ -99,17 +96,14 @@ func New() (*Service, error) {
 	}
 
 	return &Service{
-		cfg:    cfg,
-		log:    logging.New(cfg.Logger),
-		stop:   make(chan struct{}, 1),
-		reload: make(chan struct{}, 1),
-		// journalUrgentAlertLog: make(map[int]time.Time),
-		// journalInternalErrors: make(map[string]time.Time),
+		cfg:        cfg,
+		log:        logging.New(cfg.Logger),
+		stop:       make(chan struct{}, 1),
+		reload:     make(chan struct{}, 1),
 		servedApps: make(map[int]context.CancelFunc),
-		senders:    make([]notification.Notificator, len(cfg.Notification.Enabled)),
+		// senders:    make([]notification.Notificator),
 	}, nil
 }
-
 
 func (s *Service) Start() {
 	s.log.Infof("***********************SERVICE [%s] START***********************", version)
@@ -122,7 +116,7 @@ func (s *Service) Start() {
 	}
 
 	s.store = database.New(pool)
-
+	flog.Debug("connected to database")
 	for _, messenger := range s.cfg.Notification.Enabled {
 
 		switch messenger {
@@ -133,7 +127,7 @@ func (s *Service) Start() {
 		case "bitrix":
 			s.senders = append(s.senders, bitrix.New(s.cfg.Notification.Bitrix))
 		}
-		s.log.Debugf("Added Notificator: %s : %#v", messenger, s.senders)
+		flog.Debugf("added notificator: %s", strings.ToUpper(messenger))
 	}
 	if len(s.senders) == 0 {
 		flog.Fatal("no connected notificators")
@@ -449,17 +443,19 @@ func (s *Service) expirePeriodSendLastUrgent(appID int, tn time.Time) bool {
 }
 
 func (s *Service) logconfigInfo() {
-	s.log.Debugf(`Obtain Service Configuration:
+	flog := s.log.WithField("Root", "Service")
+	flog.Debugf(`Obtain Service Configuration:
 
-    Server Name         : %s
-    Check Urgent Alerts : %s
-    Check Regular Alerts: %s
-    Send Error Period   : %d
-    Send Urgent Period  : %d
-    Start Clean Old Logs: %s
-    Num Logs Attach     : %d
-    Num Attempts Fail   : %d
-	Notification Enabled: %s
+Server Name         : %s
+Check Urgent Alerts : %s
+Check Regular Alerts: %s
+Send Error Period   : %s
+Send Urgent Period  : %s
+Start Clean Old Logs: %s
+Num Logs Attach     : %d
+Num Attempts Fail   : %d
+Notification Enabled: %s
+With Check PG-Agent : %t
 
 Postgres:
     User         : %s
@@ -480,6 +476,18 @@ Email:
 	Timeout     : %s
 	WithoutAuth : %t
 	Admin Emails: %s
+
+Bitrix:
+	Host            : %s
+	User Token      : %s
+	UserID          : %s
+	BotID           : %s
+	ClientID        : %s
+	AdminID         : %s
+	Admin Token     : %s
+	Timeout         : %s
+	Lifetime Message: %s
+	Use Notification: %t
 `,
 		s.cfg.ServerName,
 		s.cfg.CheckUrgentAlerts,
@@ -490,6 +498,7 @@ Email:
 		s.cfg.NumLogsAttach,
 		s.cfg.NumAttemptsFail,
 		s.cfg.Notification.Enabled,
+		!s.cfg.WithoutCheckPgAgent,
 		s.cfg.Postgres.User,
 		s.cfg.Postgres.Pass,
 		s.cfg.Postgres.Host,
@@ -506,9 +515,23 @@ Email:
 		s.cfg.Notification.Email.Timeout,
 		s.cfg.Notification.Email.WithoutAuth,
 		s.cfg.AdminEmails,
+		s.cfg.Notification.Bitrix.Host,
+		s.cfg.Notification.Bitrix.UserToken,
+		s.cfg.Notification.Bitrix.UserID,
+		s.cfg.Notification.Bitrix.BotID,
+		s.cfg.Notification.Bitrix.ClientID,
+		s.cfg.Notification.Bitrix.AdminID,
+		s.cfg.Notification.Bitrix.AdminToken,
+		s.cfg.Notification.Bitrix.Timeout,
+		s.cfg.Notification.Bitrix.LifetimeMessage,
+		s.cfg.Notification.Bitrix.UseNotification,
 	)
-	s.log.Debug("Check Notificators:")
+	flog.Debug("Check Notificators:")
 	for _, name := range s.senders {
-		s.log.Debugln(name.String(), " = OK!")
+		check := "Failed!" 
+		if name != nil {
+			check = "Successful!"
+		} 
+		flog.Debugln(name.String(), " = ", check)
 	}
 }

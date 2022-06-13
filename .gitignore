@@ -8,5 +8,5 @@ agent-bit-control/agent-bit-control
 alert-notification/alert-notification
 alert-notification/*.exe
 alert-notification/dev.yaml
-/logs
-/bin
+logs/
+
