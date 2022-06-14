@@ -227,7 +227,10 @@ func (s *Service) trySendMessage(
 	message notification.Message,
 	attach notification.Attachment,
 	errChan chan error) {
-
+	flog := s.log.WithFields(logrus.Fields{
+		"Root":   "Sender",
+		"Sender": strings.ToUpper(sender.String()),
+	})
 	var muerr error
 	for tries := 0; tries < s.cfg.NumAttemptsFail; tries++ {
 		select {
@@ -240,7 +243,7 @@ func (s *Service) trySendMessage(
 				return
 			}
 			muerr = multierror.Append(muerr, fmt.Errorf("%s notification: %w", sender, err))
-			s.log.Errorf("Tries: %d | Could not send message alerts: %s", tries+1, err)
+			flog.Errorf("tries: %d | could not send message alerts: %s", tries+1, err)
 			if tries+1 < s.cfg.NumAttemptsFail {
 				time.Sleep(time.Second << uint(tries))
 			}
