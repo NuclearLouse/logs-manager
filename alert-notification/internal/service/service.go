@@ -10,19 +10,19 @@ import (
 	"syscall"
 	"time"
 
-	"redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/database"
-	"redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/datastructs"
-
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 	"redits.oculeus.com/asorokin/connect/postgres"
 	"redits.oculeus.com/asorokin/logging"
+	"redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/database"
+	"redits.oculeus.com/asorokin/logs-manager-src/alert-notification/internal/datastructs"
 	"redits.oculeus.com/asorokin/notification"
 	"redits.oculeus.com/asorokin/notification/bitrix"
 	"redits.oculeus.com/asorokin/notification/email"
 	"redits.oculeus.com/asorokin/notification/telegram"
+	"redits.oculeus.com/asorokin/systemctl"
 
 	"github.com/NuclearLouse/scheduler"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	conf "github.com/tinrab/kit/cfg"
 
 	"github.com/hashicorp/go-multierror"
@@ -33,7 +33,10 @@ var (
 	REGULAR, URGENT  alertType
 )
 
-const serviceName = "Alert-Service"
+const (
+	serviceName = "Alert-Service"
+	sysctlFile  = "alert-notification.service"
+)
 
 type Service struct {
 	cfg                   *config
@@ -50,6 +53,7 @@ type Service struct {
 type config struct {
 	ServerName          string           `cfg:"server_name"`
 	StartCleanOldLogs   string           `cfg:"start_clean_old_logs"`
+	RootPassword        string           `cfg:"root_password"`
 	CheckRegularAlerts  time.Duration    `cfg:"check_regular_alerts"`
 	CheckUrgentAlerts   time.Duration    `cfg:"check_urgent_alerts"`
 	SendUrgentPeriod    time.Duration    `cfg:"send_urgent_period"`
@@ -153,13 +157,13 @@ CONTROL:
 	for {
 		select {
 		case <-s.stop:
-			for _, stop := range s.servedApps {
-				stop()
+			for _, cancel := range s.servedApps {
+				cancel()
 			}
 			break CONTROL
 		case <-s.reload:
-			for _, stop := range s.servedApps {
-				stop()
+			for _, cancel := range s.servedApps {
+				cancel()
 			}
 			wgWorkers.Wait()
 			if err := s.startAllAlertWorkers(mainCtx, &wgWorkers); err != nil {
@@ -177,6 +181,24 @@ CONTROL:
 	globCancel()
 	flog.Info("database connection closed")
 	s.log.Info("***********************SERVICE STOP************************")
+
+	if err := s.Stop(); err != nil {
+		s.log.Errorln("unexpected error on shutdown: %s", err)
+	}
+}
+
+func (s *Service) Stop() error {
+	root, err := systemctl.IsRootPermissions()
+	if err != nil {
+		return err
+	}
+
+	if root {
+		_, err = systemctl.ServiceWithRootPermissions("stop", sysctlFile)
+	} else {
+		_, err = systemctl.ServiceNoRootPermissions("stop", sysctlFile, s.cfg.RootPassword)
+	}
+	return err
 }
 
 func (s *Service) monitorSignalOS(ctx context.Context) {
@@ -196,8 +218,9 @@ func (s *Service) monitorSignalOS(ctx context.Context) {
 				s.stop <- struct{}{}
 				return
 			}
+		default:
+			time.Sleep(1 * time.Second)
 		}
-		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -231,25 +254,33 @@ func (s *Service) monitorSignalDB(ctx context.Context) {
 				s.reload <- struct{}{}
 			}
 		}
-		time.Sleep(1 * time.Second)
 	}
 }
 
 func (s *Service) checkPgAgent(ctx context.Context) {
 	flog := s.log.WithField("Root", "Check health Pg-Agent")
-	flog.Info("start scheduler")
+
+	doCheck := func() {
+		if err := s.store.CheckPgAgent(ctx); err != nil {
+			flog.Errorln("invoke function public.pgagent_jobs_check():", err)
+			go s.sendAdminNotification(ERROR, err)
+		}
+	}
+
+	doCheck()
+
+	ticker := time.NewTicker(24 * time.Hour)
+
 	for {
 		select {
 		case <-ctx.Done():
-			flog.Warn("stop scheduler")
+			flog.Warn("stop worker")
 			return
+		case <-ticker.C:
+			doCheck()
 		default:
-			if err := s.store.CheckPgAgent(ctx); err != nil {
-				flog.Errorln("invoke function public.pgagent_jobs_check():", err)
-				go s.sendAdminNotification(ERROR, err)
-			}
+			time.Sleep(1 * time.Second)
 		}
-		time.Sleep(24 * time.Hour)
 	}
 }
 
@@ -291,8 +322,10 @@ CLEANER:
 					cd.AllLogs,
 					cd.ErrLogs)
 			}
+		default:
 			time.Sleep(1 * time.Second)
 		}
+
 	}
 }
 
@@ -331,7 +364,7 @@ func (s *Service) alertWorker(ctx context.Context, alertset *datastructs.AlertSe
 	})
 	flog.Info("start worker")
 	ticker := time.NewTicker(at.sendPeriod)
-	flog.Tracef("create new ticker for check alerts with period: %s", at.sendPeriod)
+	flog.Tracef("created new ticker for check alerts with period: %s", at.sendPeriod)
 	defer wg.Done()
 	for {
 		var (
@@ -380,7 +413,7 @@ func (s *Service) alertWorker(ctx context.Context, alertset *datastructs.AlertSe
 				continue
 			}
 
-			flog.Tracef("obtain:%d all unsend alerts", len(sendPool))
+			flog.Tracef("obtained:%d all unsend alerts", len(sendPool))
 
 			//Надо проверять, что для данного сервиса уже истек интервал отсылки срочных логов
 			if at.name == "URGENT" {
@@ -392,7 +425,7 @@ func (s *Service) alertWorker(ctx context.Context, alertset *datastructs.AlertSe
 			}
 
 			flog.Trace("try send alerts")
-
+			//TODO: [13] errors have occurred .... указать в шаблоне за какой период
 			if err := s.sendAlertNotification(ctx, at.name, alertset, sendPool); err != nil {
 				if muerr, ok := err.(*multierror.Error); ok {
 					if muerr.ErrorOrNil() != nil {
@@ -444,7 +477,7 @@ func (s *Service) expirePeriodSendLastUrgent(appID int, tn time.Time) bool {
 
 func (s *Service) logconfigInfo() {
 	flog := s.log.WithField("Root", "Service")
-	flog.Debugf(`Obtain Service Configuration:
+	flog.Debugf(`obtained service configuration:
 
 Server Name         : %s
 Check Urgent Alerts : %s
@@ -528,10 +561,12 @@ Bitrix:
 	)
 	flog.Debug("Check Notificators:")
 	for _, name := range s.senders {
-		check := "Failed!" 
+		check := "Failed!"
+		sender := "not defined sender"
 		if name != nil {
 			check = "Successful!"
-		} 
-		flog.Debugln(name.String(), " = ", check)
+			sender = name.String()
+		}
+		flog.Debugln(sender, " = ", check)
 	}
 }

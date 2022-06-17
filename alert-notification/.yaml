@@ -8,11 +8,11 @@ num_attempts_fail    : 10
 num_logs_for_attach  : 20
 admin_emails         : [admin@mail.xyz]
 without_check_pgagent: true
-
+# root_password        :
 
 logger:
-  loglevel: debug
-  # logfile : alert-notification.log
+  loglevel: info
+  # logfile : logs/alert-notification.log
 
   logrotation:
     maxsize   : 1

@@ -7,20 +7,18 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"text/template"
 	"time"
 
-	"redits.oculeus.com/asorokin/logs-manager-src/agent-bit-control/internal/database"
-	"redits.oculeus.com/asorokin/logs-manager-src/agent-bit-control/internal/datastructs"
-
 	"redits.oculeus.com/asorokin/connect/postgres"
 	"redits.oculeus.com/asorokin/logging"
+	"redits.oculeus.com/asorokin/logs-manager-src/agent-bit-control/internal/database"
+	"redits.oculeus.com/asorokin/logs-manager-src/agent-bit-control/internal/datastructs"
+	"redits.oculeus.com/asorokin/systemctl"
 
 	conf "github.com/tinrab/kit/cfg"
 )
@@ -28,6 +26,8 @@ import (
 var (
 	version, cfgFile string
 )
+
+const sysctlFile = "agent-bit-control.service"
 
 type Service struct {
 	cfg        *config
@@ -38,15 +38,15 @@ type Service struct {
 }
 
 type config struct {
-	ServerName        string           `cfg:"server_name"`
-	UserName          string           `cfg:"user_name"`
-	Password          string           `cfg:"user_pass"`
-	TableAllLogs      string           `cfg:"table_all_logs"`
-	TableAlertLogs    string           `cfg:"table_alerts_logs"`
-	FluentServiceFile string           `cfg:"fluent_service_file"`
-	PathFluentConfig  string           `cfg:"path_fluent_config"`
-	Logger            *logging.Config  `cfg:"logger"`
-	Postgres          *postgres.Config `cfg:"postgres"`
+	ServerName        string `cfg:"server_name"`
+	RootPassword      string `cfg:"root_password"`
+	TableAllLogs      string `cfg:"table_all_logs"`
+	TableAlertLogs    string `cfg:"table_alerts_logs"`
+	FluentServiceFile string `cfg:"fluent_service_file"`
+	PathFluentConfig  string `cfg:"path_fluent_config"`
+
+	Logger   *logging.Config  `cfg:"logger"`
+	Postgres *postgres.Config `cfg:"postgres"`
 }
 
 func Version() {
@@ -101,6 +101,23 @@ CONTROL:
 	globCancel()
 	flog.Info("database connection closed")
 	s.log.Info("***********************SERVICE STOP************************")
+	if err := s.Stop(); err != nil {
+		s.log.Errorln("unexpected error on shutdown: %s", err)
+	}
+}
+
+func (s *Service) Stop() error {
+	root, err := systemctl.IsRootPermissions()
+	if err != nil {
+		return err
+	}
+
+	if root {
+		_, err = systemctl.ServiceWithRootPermissions("stop", sysctlFile)
+	} else {
+		_, err = systemctl.ServiceNoRootPermissions("stop", sysctlFile, s.cfg.RootPassword)
+	}
+	return err
 }
 
 func (s *Service) monitorSignalOS(ctx context.Context) {
@@ -120,8 +137,9 @@ func (s *Service) monitorSignalOS(ctx context.Context) {
 				s.stop <- struct{}{}
 				return
 			}
+		default:
+			time.Sleep(1 * time.Second)
 		}
-		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -190,75 +208,26 @@ func (s *Service) monitorSignalDB(ctx context.Context) {
 				}
 			}
 		}
-		time.Sleep(1 * time.Second)
 	}
 }
 
 func (s *Service) restartAgent() error {
-	// _, err := exec.Command("sh", "-c", "echo '"+ sudopassword +"' | sudo -S pkill -SIGINT my_app_name").Output()
-	//TODO: Еще можно добавить проверку на whoami и использовать переменную окружения USER_NAME
-	out, err := exec.Command("id", "-u").Output()
+	root, err := systemctl.IsRootPermissions()
 	if err != nil {
-		return fmt.Errorf("check root permisions: %w", err)
+		return err
 	}
-	// 0 = root, 501 = non-root user
-	i, err := strconv.Atoi(string(out[:len(out)-1]))
-	if err != nil {
-		return fmt.Errorf("convert answer check root: %w", err)
-	}
-	type coms struct {
-		command string
-		args    []string
-	}
-	var commands []coms
-	switch i {
-	case 0:
-		commands = []coms{
-			{
-				command: "systemctl",
-				args:    []string{"stop", s.cfg.FluentServiceFile},
-			},
-			{
-				command: "systemctl",
-				args:    []string{"start", s.cfg.FluentServiceFile},
-			},
+	if root {
+		if _, err := systemctl.ServiceWithRootPermissions("stop", s.cfg.FluentServiceFile); err != nil {
+			return err
 		}
-	default:
-		// echo 'PASSWORD' | sudo -S systemctl stop fluent-bit.service
-		commands = []coms{
-			{
-				command: "echo",
-				args: []string{
-					fmt.Sprintf("'%s'", s.cfg.Password),
-					"|",
-					"sudo",
-					"-S",
-					"systemctl",
-					"stop",
-					s.cfg.FluentServiceFile,
-				},
-			},
-			{
-				command: "echo",
-				args: []string{
-					fmt.Sprintf("'%s'", s.cfg.Password),
-					"|",
-					"sudo",
-					"-S",
-					"systemctl",
-					"start",
-					s.cfg.FluentServiceFile,
-				},
-			},
+		if _, err := systemctl.ServiceWithRootPermissions("start", s.cfg.FluentServiceFile); err != nil {
+			return err
 		}
-	}
-	for _, c := range commands {
-		if err := func() error {
-			if err := exec.Command(c.command, c.args...).Run(); err != nil {
-				return err
-			}
-			return nil
-		}(); err != nil {
+	} else {
+		if _, err := systemctl.ServiceNoRootPermissions("stop", s.cfg.FluentServiceFile, s.cfg.RootPassword); err != nil {
+			return err
+		}
+		if _, err := systemctl.ServiceNoRootPermissions("start", s.cfg.FluentServiceFile, s.cfg.RootPassword); err != nil {
 			return err
 		}
 	}
