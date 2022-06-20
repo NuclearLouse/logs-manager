@@ -3,10 +3,10 @@ package service
 import (
 	"bytes"
 	"context"
+	"embed"
 	"fmt"
 	"html/template"
 	"io"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +16,9 @@ import (
 	"github.com/hashicorp/go-multierror"
 	"github.com/sirupsen/logrus"
 )
+
+//go:embed templates/*
+var tmpl embed.FS
 
 type dataToSend struct {
 	Error string
@@ -95,7 +98,7 @@ func (s *Service) sendAdminNotification(typeNotificate notificate, internalError
 	for _, sender := range s.senders {
 		body := new(bytes.Buffer)
 		flog.Debug("trying to fill the template with data")
-		err := template.Must(template.ParseFiles(filepath.Join("templates", sender.String(), typeNotificate.String()+".tmpl"))).Execute(body, data)
+		err := template.Must(template.ParseFS(tmpl, fileTemplate(sender.String(), typeNotificate.String()))).Execute(body, data)
 		if err != nil {
 			flog.Errorln("parse template:", err)
 			return
@@ -165,7 +168,7 @@ func (s *Service) sendAlertNotification(ctx context.Context, typeAlert string, a
 	for _, sender := range s.senders {
 		notificator := sender
 		body := new(bytes.Buffer)
-		err := template.Must(template.ParseFiles(filepath.Join("templates", notificator.String(), tmplName+".tmpl"))).Execute(body, data)
+		err := template.Must(template.ParseFS(tmpl, fileTemplate(notificator.String(), tmplName))).Execute(body, data)
 		if err != nil {
 			return fmt.Errorf("must template: %w", err)
 		}
@@ -252,4 +255,8 @@ func (s *Service) trySendMessage(
 	}
 
 	errChan <- fmt.Errorf("could not send %s mesage alerts - all attempts have been exhausted: %w", sender, muerr)
+}
+
+func fileTemplate(sender, name string) string {
+	return fmt.Sprintf("templates/%s/%s.*", name)
 }

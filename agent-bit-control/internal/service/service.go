@@ -4,11 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"embed"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"text/template"
@@ -26,6 +26,9 @@ import (
 var (
 	version, cfgFile string
 )
+
+//go:embed templates/*.tmpl
+var tmpl embed.FS
 
 const sysctlFile = "agent-bit-control.service"
 
@@ -284,7 +287,7 @@ func (s *Service) defaultConfigServiceBlock() ([]string, error) {
 		StorageMetrics:  "on",
 	}
 	buf := new(bytes.Buffer)
-	if err := template.Must(template.ParseFiles(fileTemplate("service"))).Execute(buf, tmplData); err != nil {
+	if err := template.Must(template.ParseFS(tmpl, fileTemplate("service"))).Execute(buf, tmplData); err != nil {
 		return nil, fmt.Errorf("execute data template: %w", err)
 	}
 	r := bufio.NewReader(buf)
@@ -306,10 +309,10 @@ func (s *Service) defaultConfigServiceBlock() ([]string, error) {
 //TODO: при ошибке не перезаписывает весь конфиг, а только блок [SERVICE] !!!
 func (s *Service) writeNewConfig() error {
 
-	separator := template.Must(template.ParseFiles(fileTemplate("separator")))
-	input := template.Must(template.ParseFiles(fileTemplate("input")))
-	output := template.Must(template.ParseFiles(fileTemplate("output")))
-	filter := template.Must(template.ParseFiles(fileTemplate("filter")))
+	separator := template.Must(template.ParseFS(tmpl, fileTemplate("separator")))
+	input := template.Must(template.ParseFS(tmpl, fileTemplate("input")))
+	output := template.Must(template.ParseFS(tmpl, fileTemplate("output")))
+	filter := template.Must(template.ParseFS(tmpl, fileTemplate("filter")))
 
 	var templates []struct {
 		template *template.Template
@@ -412,5 +415,5 @@ func (s *Service) writeNewConfig() error {
 }
 
 func fileTemplate(name string) string {
-	return filepath.Join("./templates", name+".tmpl")
+	return fmt.Sprintf("template/%s.*", name)
 }
