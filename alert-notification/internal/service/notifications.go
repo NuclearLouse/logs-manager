@@ -258,5 +258,5 @@ func (s *Service) trySendMessage(
 }
 
 func fileTemplate(sender, name string) string {
-	return fmt.Sprintf("templates/%s/%s.*", name)
+	return fmt.Sprintf("templates/%s/%s.*", sender, name)
 }
